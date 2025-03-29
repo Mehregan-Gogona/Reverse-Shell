@@ -10,16 +10,45 @@
 #define PORT 3000
 #define BUFFER_SIZE 2048
 
-// Function to execute a command and send back its output
+// Function to execute non-cd commands and send back its output
+void execute_command(int client_sock, const char *command)
+{
+    char output[BUFFER_SIZE];
+    memset(output, 0, BUFFER_SIZE);
+
+    FILE *fp = popen(command, "r");
+    if (fp == NULL)
+    {
+        // Limit the command string output with a precision modifier to avoid overflow
+        snprintf(output, BUFFER_SIZE, "Error executing command: %.2022s\n", command);
+    }
+    else
+    {
+        fread(output, 1, BUFFER_SIZE - 1, fp);
+        pclose(fp);
+    }
+
+    // Send the output back to the client
+    send(client_sock, output, strlen(output), 0);
+}
+
 void process_client(int client_sock)
 {
     char command[BUFFER_SIZE];
-    char output[BUFFER_SIZE];
     ssize_t n;
 
     // Print connection established message
     const char *welcome = "Connected to server. Type commands (or type 'exit' to disconnect).\n";
     send(client_sock, welcome, strlen(welcome), 0);
+
+    // Maintain a persistent working directory for the session
+    // This will persist between commands if we use chdir() accordingly.
+    char cwd[BUFFER_SIZE];
+    if (getcwd(cwd, sizeof(cwd)) == NULL)
+    {
+        perror("getcwd");
+        strcpy(cwd, "/");
+    }
 
     while (1)
     {
@@ -31,25 +60,53 @@ void process_client(int client_sock)
         // Remove any trailing newline characters
         command[strcspn(command, "\n")] = '\0';
 
-        // Exit if command is "exit"
+        // Exit if the command is "exit"
         if (strcmp(command, "exit") == 0)
             break;
 
-        FILE *fp = popen(command, "r");
-        if (fp == NULL)
+        // Check if the command is a "cd" command to update the working directory.
+        if (strncmp(command, "cd ", 3) == 0 || strcmp(command, "cd") == 0)
         {
-            // Limit the command string output to avoid buffer overflow
-            snprintf(output, BUFFER_SIZE, "Error executing command: %.2022s\n", command);
+            // Extract directory if provided.
+            char *dir = command + 2;
+            // If only "cd" is entered, default to the home directory
+            if (*dir == '\0')
+            {
+                dir = getenv("HOME");
+                if (!dir)
+                    dir = "/";
+            }
+            else
+            {
+                // Remove leading spaces
+                while (*dir == ' ')
+                    dir++;
+            }
+            if (chdir(dir) == 0)
+            {
+                // Successfully changed directory, update cwd
+                if (getcwd(cwd, sizeof(cwd)) == NULL)
+                {
+                    perror("getcwd");
+                }
+                // Inform client of success
+                char success_msg[BUFFER_SIZE];
+                snprintf(success_msg, BUFFER_SIZE, "Directory changed to: %s\n", cwd);
+                send(client_sock, success_msg, strlen(success_msg), 0);
+            }
+            else
+            {
+                char err_msg[BUFFER_SIZE];
+                snprintf(err_msg, BUFFER_SIZE, "Failed to change directory to: %s\n", dir);
+                send(client_sock, err_msg, strlen(err_msg), 0);
+            }
         }
         else
         {
-            memset(output, 0, BUFFER_SIZE);
-            fread(output, 1, BUFFER_SIZE - 1, fp);
-            pclose(fp);
+            // Build the command with updated working directory if necessary.
+            // For simplicity, we execute as is because the process's cwd is updated.
+            execute_command(client_sock, command);
         }
-
-        // Send the output back to the client
-        send(client_sock, output, strlen(output), 0);
     }
     close(client_sock);
 }
@@ -107,7 +164,7 @@ int main()
         }
         close(client_sock);
 
-        // Optionally, wait for child processes to prevent zombies
+        // Clean up any finished child processes
         while (waitpid(-1, NULL, WNOHANG) > 0)
             ;
     }
