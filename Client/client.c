@@ -2,60 +2,65 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
 
+#define SERVER_IP "127.0.0.1"   // Change to your server's IP if needed
 #define PORT 3000
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 2048
 
-int main()
-{
-    int sock;
+int main() {
+    int sockfd;
     struct sockaddr_in server_addr;
-    char buffer[BUFFER_SIZE];
-
+    char command[BUFFER_SIZE];
+    char response[BUFFER_SIZE];
+    ssize_t n;
+    
     // Create socket
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0)
-    {
-        perror("Socket creation failed");
-        exit(1);
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
     }
-
-    // Set up server address
+    
+    // Define the server address
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
-    inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); // Connect to localhost
-
-    // Connect to server
-    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        perror("Connection failed");
-        exit(1);
+    if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0) {
+        perror("inet_pton");
+        exit(EXIT_FAILURE);
     }
-    printf("Connected to server. Enter commands (e.g., 'ls', 'whoami'):\n");
-
-    while (1)
-    {
-        // Get command from user
+    
+    // Connect to server
+    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("connect");
+        exit(EXIT_FAILURE);
+    }
+    
+    // Receive welcome message
+    n = recv(sockfd, response, BUFFER_SIZE - 1, 0);
+    if(n > 0) {
+        response[n] = '\0';
+        printf("%s", response);
+    }
+    
+    // Loop to send commands
+    while (1) {
         printf("> ");
-        fgets(buffer, BUFFER_SIZE, stdin);
-        buffer[strcspn(buffer, "\n")] = 0; // Remove newline
-
+        if (!fgets(command, BUFFER_SIZE, stdin)) break;
         // Send command to server
-        send(sock, buffer, strlen(buffer), 0);
-
-        // Receive and display output
-        while ((recv(sock, buffer, BUFFER_SIZE - 1, 0)) > 0)
-        {
-            buffer[BUFFER_SIZE - 1] = '\0';
-            printf("%s", buffer);
-            if (strlen(buffer) < BUFFER_SIZE - 1)
-                break; // End of response
+        send(sockfd, command, strlen(command), 0);
+        
+        // If command is "exit", break loop
+        if (strncmp(command, "exit", 4) == 0)
+            break;
+        
+        // Receive response from server
+        memset(response, 0, BUFFER_SIZE);
+        n = recv(sockfd, response, BUFFER_SIZE - 1, 0);
+        if (n > 0) {
+            response[n] = '\0';
+            printf("%s", response);
         }
     }
-
-    close(sock);
+    close(sockfd);
     return 0;
 }
