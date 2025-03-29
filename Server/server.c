@@ -5,99 +5,97 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/wait.h>
 
 #define PORT 3000
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 2048
 
-void handle_client(int client_sock)
-{
-    char buffer[BUFFER_SIZE];
-    int bytes_received;
+// Function to execute a command and send back its output
+void process_client(int client_sock) {
+    char command[BUFFER_SIZE];
+    char output[BUFFER_SIZE];
+    ssize_t n;
+    
+    // Print connection established message
+    const char *welcome = "Connected to server. Type commands (or type 'exit' to disconnect).\n";
+    send(client_sock, welcome, strlen(welcome), 0);
 
-    while (1)
-    {
-        // Receive command from client
-        bytes_received = recv(client_sock, buffer, BUFFER_SIZE - 1, 0);
-        if (bytes_received <= 0)
-        {
-            close(client_sock);
-            exit(0); // Client disconnected
+    while (1) {
+        memset(command, 0, BUFFER_SIZE);
+        n = recv(client_sock, command, BUFFER_SIZE - 1, 0);
+        if (n <= 0) break;
+        
+        // Remove any trailing newline characters
+        command[strcspn(command, "\n")] = '\0';
+        
+        // Exit if command is "exit"
+        if (strcmp(command, "exit") == 0) break;
+        
+        FILE *fp = popen(command, "r");
+        if (fp == NULL) {
+            snprintf(output, BUFFER_SIZE, "Error executing command: %s\n", command);
+        } else {
+            memset(output, 0, BUFFER_SIZE);
+            fread(output, 1, BUFFER_SIZE - 1, fp);
+            pclose(fp);
         }
-        buffer[bytes_received] = '\0'; // Null-terminate the string
-
-        // Execute the command and redirect output to client
-        FILE *fp = popen(buffer, "r"); // Open pipe to command output
-        if (fp == NULL)
-        {
-            perror("popen failed");
-            continue;
-        }
-
-        // Send command output back to client
-        while (fgets(buffer, BUFFER_SIZE, fp) != NULL)
-        {
-            send(client_sock, buffer, strlen(buffer), 0);
-        }
-        pclose(fp);
+        
+        // Send the output back to the client
+        send(client_sock, output, strlen(output), 0);
     }
+    close(client_sock);
 }
 
-int main()
-{
-    int server_sock, client_sock;
+int main() {
+    int sockfd, client_sock;
     struct sockaddr_in server_addr, client_addr;
-    socklen_t addr_len = sizeof(client_addr);
-
-    // Create socket
-    server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0)
-    {
-        perror("Socket creation failed");
-        exit(1);
+    socklen_t client_len = sizeof(client_addr);
+    
+    // Create a TCP socket
+    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
     }
-
-    // Set up server address structure
+    
+    // Bind socket to specified port
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY; // Bind to any available interface
+    server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
-
-    // Bind socket
-    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        perror("Bind failed");
-        exit(1);
+    if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind");
+        close(sockfd);
+        exit(EXIT_FAILURE);
     }
-
-    // Listen for connections
-    if (listen(server_sock, 5) < 0)
-    {
-        perror("Listen failed");
-        exit(1);
+    
+    // Listen for incoming connections
+    if (listen(sockfd, 5) < 0) {
+        perror("listen");
+        close(sockfd);
+        exit(EXIT_FAILURE);
     }
     printf("Server listening on port %d...\n", PORT);
-
-    // Accept incoming connections
-    while (1)
-    {
-        client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &addr_len);
-        if (client_sock < 0)
-        {
-            perror("Accept failed");
+    
+    // Accept and process connections
+    while (1) {
+        client_sock = accept(sockfd, (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock < 0) {
+            perror("accept");
             continue;
         }
-        printf("New connection from %s\n", inet_ntoa(client_addr.sin_addr));
-
-        // Fork to handle multiple clients
-        if (fork() == 0)
-        {                       // Child process
-            close(server_sock); // Child doesn't need the listener
-            handle_client(client_sock);
-            close(client_sock);
+        printf("Client connected: %s\n", inet_ntoa(client_addr.sin_addr));
+        
+        // Fork to handle multiple clients concurrently
+        if (fork() == 0) {
+            close(sockfd);
+            process_client(client_sock);
             exit(0);
         }
-        close(client_sock); // Parent doesn't need this client socket
+        close(client_sock);
+        
+        // Optionally, wait for child processes to prevent zombies
+        while (waitpid(-1, NULL, WNOHANG) > 0)
+            ;
     }
-
-    close(server_sock);
+    close(sockfd);
     return 0;
 }
