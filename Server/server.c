@@ -33,7 +33,8 @@ void process_client(int client_sock) {
         
         FILE *fp = popen(command, "r");
         if (fp == NULL) {
-            snprintf(output, BUFFER_SIZE, "Error executing command: %s\n", command);
+            // Limit the command string output to avoid buffer overflow
+            snprintf(output, BUFFER_SIZE, "Error executing command: %.2022s\n", command);
         } else {
             memset(output, 0, BUFFER_SIZE);
             fread(output, 1, BUFFER_SIZE - 1, fp);
@@ -45,7 +46,7 @@ void process_client(int client_sock) {
     }
     close(client_sock);
 }
-
+  
 int main() {
     int sockfd, client_sock;
     struct sockaddr_in server_addr, client_addr;
@@ -93,8 +94,7 @@ int main() {
         close(client_sock);
         
         // Optionally, wait for child processes to prevent zombies
-        while (waitpid(-1, NULL, WNOHANG) > 0)
-            ;
+        while (waitpid(-1, NULL, WNOHANG) > 0);
     }
     close(sockfd);
     return 0;
