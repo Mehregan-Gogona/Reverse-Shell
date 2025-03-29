@@ -1,2 +1,3 @@
-.idea/
+git rm -r --cached .idea
+git commit -m "Stop tracking .idea directory"
 project1.pdf
