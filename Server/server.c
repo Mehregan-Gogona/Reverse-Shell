@@ -12,15 +12,13 @@
 #define BUFFER_SIZE 1024
 
 // Thread function to handle an individual client connection.
-// The server receives commands from the client, executes them locally,
-// and sends the output back to the client. The server supports "exit"
-// to close the client session.
+// Adjusted to handle "cd" commands properly by updating the working directory.
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
     free(arg);
     char command[BUFFER_SIZE];
-    char output[BUFFER_SIZE * 2]; // Buffer to store execution output
+    char output[BUFFER_SIZE * 2];
     ssize_t num_read;
 
     while (1)
@@ -41,7 +39,42 @@ void *client_handler(void *arg)
             break;
         }
 
-        // Execute the command using popen() and capture the output
+        // Check for "cd" command and handle it specially.
+        if (strncmp(command, "cd ", 3) == 0)
+        {
+            // Get the argument after "cd "
+            char *dir = command + 3;
+            // If no directory is provided, you could default to home directory.
+            if (strlen(dir) == 0)
+            {
+                dir = getenv("HOME");
+            }
+            if (chdir(dir) != 0)
+            {
+                snprintf(output, sizeof(output), "cd: %s: %s\n", dir, strerror(errno));
+            }
+            else
+            {
+                // Indicate the new directory
+                char cwd[1024];
+                if (getcwd(cwd, sizeof(cwd)) != NULL)
+                {
+                    snprintf(output, sizeof(output), "Directory changed to: %s\n", cwd);
+                }
+                else
+                {
+                    snprintf(output, sizeof(output), "cd: error retrieving current directory\n");
+                }
+            }
+            if (send(client_sock, output, strlen(output), 0) < 0)
+            {
+                perror("send failed");
+                break;
+            }
+            continue; // Skip popen() execution, move to next iteration.
+        }
+
+        // For other commands, execute them using popen() in the current working directory.
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
@@ -137,7 +170,7 @@ int main()
             free(client_sock);
             continue;
         }
-        // Detach thread so that resources are freed automatically when thread exits
+        // Detach thread so resources are freed automatically when thread exits
         pthread_detach(tid);
     }
 
