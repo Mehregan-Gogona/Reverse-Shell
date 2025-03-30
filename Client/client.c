@@ -18,12 +18,6 @@ int main(int argc, char *argv[])
     char response[BUFFER_SIZE * 2]; // Buffer for response from server
     ssize_t num_received;
 
-    if (argc != 2)
-    {
-        fprintf(stderr, "Usage: %s <server_ip>\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
     // Create socket
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
@@ -34,8 +28,8 @@ int main(int argc, char *argv[])
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
 
-    // Convert IPv4 address from text to binary form
-    if (inet_pton(AF_INET, argv[1], &server_addr.sin_addr) <= 0)
+    // Always connect to localhost (127.0.0.1)
+    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0)
     {
         fprintf(stderr, "Invalid address/ Address not supported\n");
         close(sock);
@@ -50,7 +44,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    printf("Connected to server %s:%d\n", argv[1], PORT);
+    printf("Connected to server 127.0.0.1:%d\n", PORT);
     printf("Enter commands to be executed on the server. Type 'exit' to close.\n");
 
     while (1)
