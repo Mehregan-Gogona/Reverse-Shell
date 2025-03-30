@@ -2,3 +2,4 @@ project1.pdf
 /.idea
 server
 client
+.vscode/settings.json
