@@ -6,19 +6,29 @@
 
 #define PORT 3000
 #define BUFFER_SIZE 1024
+#define FINISHER "***" // This must match the server's FINISHER
 
-// The client connects to the reverse shell server and sends commands
-// which are executed by the server. The output returned from the server
-// is then displayed locally.
+// Helper function to check if the FINISHER exists within a string.
+int contains_FINISHER(const char *buffer)
+{
+    return strstr(buffer, FINISHER) != NULL;
+}
+
 int main(int argc, char *argv[])
 {
     int sock;
     struct sockaddr_in server_addr;
     char command[BUFFER_SIZE];
-    char response[BUFFER_SIZE * 2]; // Buffer for response from server
+    char response[BUFFER_SIZE * 2];
     ssize_t num_received;
 
-    // Create socket
+    if (argc != 2)
+    {
+        fprintf(stderr, "Usage: %s <server_ip>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    // Create and connect socket
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
         perror("Socket creation error");
@@ -28,15 +38,13 @@ int main(int argc, char *argv[])
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
 
-    // Always connect to localhost (127.0.0.1)
-    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0)
+    if (inet_pton(AF_INET, argv[1], &server_addr.sin_addr) <= 0)
     {
-        fprintf(stderr, "Invalid address/ Address not supported\n");
+        fprintf(stderr, "Invalid address / Address not supported\n");
         close(sock);
         exit(EXIT_FAILURE);
     }
 
-    // Connect to the reverse shell server
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
         perror("Connection Failed");
@@ -44,7 +52,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    printf("Connected to server 127.0.0.1:%d\n", PORT);
+    printf("Connected to server %s:%d\n", argv[1], PORT);
     printf("Enter commands to be executed on the server. Type 'exit' to close.\n");
 
     while (1)
@@ -55,30 +63,46 @@ int main(int argc, char *argv[])
         {
             break;
         }
-        command[strcspn(command, "\n")] = '\0'; // Remove newline
+        command[strcspn(command, "\n")] = '\0';
 
-        // Send command to the server
+        // Send command
         if (send(sock, command, strlen(command), 0) < 0)
         {
-            perror("send failed!");
+            perror("send failed");
             break;
         }
 
-        // If command is "exit", break out after sending
+        // If exit command, break out of loop
         if (strncmp(command, "exit", 4) == 0)
         {
             break;
         }
 
-        // Receive response from the server
+        // Read response until the FINISHER is encountered.
         memset(response, 0, sizeof(response));
-        num_received = recv(sock, response, sizeof(response) - 1, 0);
-        if (num_received <= 0)
+        int total_read = 0;
+        while (1)
         {
-            perror("recieve failed or connection closed.");
-            break;
+            num_received = recv(sock, response + total_read, sizeof(response) - total_read - 1, 0);
+            if (num_received <= 0)
+            {
+                perror("recv failed or connection closed");
+                exit(EXIT_FAILURE);
+            }
+            total_read += num_received;
+            response[total_read] = '\0';
+            if (contains_FINISHER(response))
+            {
+                // Remove FINISHER before printing.
+                char *delim_ptr = strstr(response, FINISHER);
+                if (delim_ptr)
+                {
+                    *delim_ptr = '\0';
+                }
+                break;
+            }
         }
-        response[num_received] = '\0';
+
         printf("%s", response);
     }
 

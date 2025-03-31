@@ -11,27 +11,14 @@
 
 #define PORT 3000
 #define BUFFER_SIZE 1024
-
-// A helper function to check if a string is empty or only whitespace.
-int is_empty_or_whitespace(const char *s)
-{
-    while (*s)
-    {
-        if (!isspace((unsigned char)*s))
-        {
-            return 0;
-        }
-        s++;
-    }
-    return 1;
-}
+#define FINISHER "***" // End-of-message delimiter
 
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
     free(arg);
     char command[BUFFER_SIZE];
-    char output[BUFFER_SIZE * 2]; // Buffer for command output
+    char output[BUFFER_SIZE * 2];
     ssize_t num_read;
 
     while (1)
@@ -53,19 +40,19 @@ void *client_handler(void *arg)
             continue;
         }
 
-        // Special handling for "exit"
+        // Check for "exit" command
         if (strncmp(command, "exit", 4) == 0)
         {
             break;
         }
 
-        // Special handling for the "cd" command:
+        // Handling the "cd" command (special case)
         if (strncmp(command, "cd ", 3) == 0)
         {
             char *dir = command + 3;
-            if (is_empty_or_whitespace(dir))
+            if (dir[0] == '\0')
             {
-                dir = getenv("HOME"); // Default to HOME directory if no argument provided.
+                dir = getenv("HOME");
             }
             if (chdir(dir) != 0)
             {
@@ -83,13 +70,13 @@ void *client_handler(void *arg)
                     snprintf(output, sizeof(output), "cd: error retrieving current directory\n");
                 }
             }
-            // Append newline to ensure data is sent.
-            strcat(output, "\n");
+            // Append delimiter even for commands with output
+            strcat(output, FINISHER);
             send(client_sock, output, strlen(output), 0);
             continue;
         }
 
-        // Execute other commands using popen()
+        // Execute general commands via popen
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
@@ -116,8 +103,8 @@ void *client_handler(void *arg)
             pclose(fp);
         }
 
-        // Ensure the output is non-empty by appending a newline character.
-        strcat(output, "\n");
+        // Even if output is empty, ensure the delimiter is sent
+        strcat(output, FINISHER);
 
         if (send(client_sock, output, strlen(output), 0) < 0)
         {
