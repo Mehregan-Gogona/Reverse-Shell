@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
         // Send command to the server
         if (send(sock, command, strlen(command), 0) < 0)
         {
-            perror("send failed");
+            perror("send failed!");
             break;
         }
 
@@ -75,7 +75,7 @@ int main(int argc, char *argv[])
         num_received = recv(sock, response, sizeof(response) - 1, 0);
         if (num_received <= 0)
         {
-            perror("recv failed or connection closed");
+            perror("recieve failed or connection closed.");
             break;
         }
         response[num_received] = '\0';
