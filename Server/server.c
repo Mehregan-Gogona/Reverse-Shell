@@ -81,7 +81,9 @@ void *client_handler(void *arg)
             continue;
         }
 
-        // Prepare to read command output.
+        // In the client_handler function, replace the general command handling section:
+
+        // Execute general commands via popen.
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
@@ -92,57 +94,23 @@ void *client_handler(void *arg)
             continue;
         }
 
-        // Dynamically send while reading in chunks.
+        // Read output in chunks and send immediately
         char chunk[CHUNK_SIZE];
-        // We'll accumulate output in a temporary buffer before appending the delimiter.
-        size_t total_output_size = 0;
-        char *full_output = NULL;
-        size_t alloc_size = 0;
         while (fgets(chunk, sizeof(chunk), fp) != NULL)
         {
-            size_t chunk_len = strlen(chunk);
-            // Increase buffer if needed.
-            if (total_output_size + chunk_len + 1 > alloc_size)
+            if (send_all(client_sock, chunk, strlen(chunk)) < 0)
             {
-                alloc_size = (total_output_size + chunk_len + 1) * 2;
-                full_output = realloc(full_output, alloc_size);
-                if (full_output == NULL)
-                {
-                    perror("realloc failed");
-                    break;
-                }
+                pclose(fp);
+                break;
             }
-            memcpy(full_output + total_output_size, chunk, chunk_len);
-            total_output_size += chunk_len;
-            full_output[total_output_size] = '\0';
         }
         pclose(fp);
 
-        // If no output, set an empty string.
-        if (full_output == NULL)
+        // Send the delimiter after all chunks
+        if (send_all(client_sock, DELIMITER, strlen(DELIMITER)) < 0)
         {
-            full_output = strdup("");
-            total_output_size = strlen(full_output);
-        }
-
-        // Append delimiter at the end.
-        size_t delim_len = strlen(DELIMITER);
-        full_output = realloc(full_output, total_output_size + delim_len + 1);
-        if (full_output == NULL)
-        {
-            perror("realloc failed");
             break;
         }
-        strcat(full_output, DELIMITER);
-        total_output_size += delim_len;
-
-        // Send the full output regardless of its size.
-        if (send_all(client_sock, full_output, total_output_size) < 0)
-        {
-            free(full_output);
-            break;
-        }
-        free(full_output);
     }
 
     close(client_sock);
