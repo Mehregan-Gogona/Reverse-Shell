@@ -7,47 +7,18 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ctype.h>
 
 #define PORT 3000
-#define CHUNK_SIZE 1024
-#define DELIMITER "***" // End-of-message delimiter
-
-// Send data in full even if it is longer than CHUNK_SIZE.
-int send_all(int sock, const char *buffer, size_t length)
-{
-    size_t total_sent = 0;
-    while (total_sent < length)
-    {
-        ssize_t sent = send(sock, buffer + total_sent, length - total_sent, 0);
-        if (sent <= 0)
-        {
-            return -1; // error or connection closed
-        }
-        total_sent += sent;
-    }
-    return 0;
-}
-
-// Function to check if a string is empty or contains only whitespace
-int is_empty_or_whitespace(const char *str)
-{
-    if (str == NULL)
-        return 1;
-
-    while (*str)
-    {
-        if (!isspace((unsigned char)*str))
-            return 0;
-        str++;
-    }
-    return 1;
-}
+#define BUFFER_SIZE 1024
+#define FINISHER "***" // End-of-message delimiter
 
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
     free(arg);
-    char command[CHUNK_SIZE];
+    char command[BUFFER_SIZE];
+    char output[BUFFER_SIZE * 2];
     ssize_t num_read;
 
     while (1)
@@ -61,69 +32,83 @@ void *client_handler(void *arg)
         }
         command[num_read] = '\0';
 
-        // Handle exit.
-        if (strncmp(command, "exit", 4) == 0)
-            break;
+        // Skip command execution if it's empty.
+        if (is_empty_or_whitespace(command))
+        {
+            const char *empty_msg = "No command provided.\n";
+            send(client_sock, empty_msg, strlen(empty_msg), 0);
+            continue;
+        }
 
-        // Handle "cd" command specially.
-        char output_buffer[CHUNK_SIZE * 2];
-        memset(output_buffer, 0, sizeof(output_buffer));
+        // Check for "exit" command
+        if (strncmp(command, "exit", 4) == 0)
+        {
+            break;
+        }
+
+        // Handling the "cd" command (special case)
         if (strncmp(command, "cd ", 3) == 0)
         {
             char *dir = command + 3;
             if (dir[0] == '\0')
+            {
                 dir = getenv("HOME");
+            }
             if (chdir(dir) != 0)
             {
-                snprintf(output_buffer, sizeof(output_buffer), "cd: %s: %s\n", dir, strerror(errno));
+                snprintf(output, sizeof(output), "cd: %s: %s\n", dir, strerror(errno));
             }
             else
             {
-                char cwd[CHUNK_SIZE];
+                char cwd[1024];
                 if (getcwd(cwd, sizeof(cwd)) != NULL)
                 {
-                    snprintf(output_buffer, sizeof(output_buffer), "Directory changed to: %s\n", cwd);
+                    snprintf(output, sizeof(output), "Directory changed to: %s\n", cwd);
                 }
                 else
                 {
-                    snprintf(output_buffer, sizeof(output_buffer), "cd: error retrieving current directory\n");
+                    snprintf(output, sizeof(output), "cd: error retrieving current directory\n");
                 }
             }
-            // Append delimiter to signal end of output.
-            strncat(output_buffer, DELIMITER, sizeof(output_buffer) - strlen(output_buffer) - 1);
-            if (send_all(client_sock, output_buffer, strlen(output_buffer)) < 0)
-                break;
+            // Append delimiter even for commands with output
+            strcat(output, FINISHER);
+            send(client_sock, output, strlen(output), 0);
             continue;
         }
 
-        // In the client_handler function, replace the general command handling section:
-
-        // Execute general commands via popen.
+        // Execute general commands via popen
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
-            snprintf(output_buffer, sizeof(output_buffer), "Failed to execute command.\n");
-            strncat(output_buffer, DELIMITER, sizeof(output_buffer) - strlen(output_buffer) - 1);
-            if (send_all(client_sock, output_buffer, strlen(output_buffer)) < 0)
-                break;
-            continue;
+            snprintf(output, sizeof(output), "Failed to execute command.\n");
         }
-
-        // Read output in chunks and send immediately
-        char chunk[CHUNK_SIZE];
-        while (fgets(chunk, sizeof(chunk), fp) != NULL)
+        else
         {
-            if (send_all(client_sock, chunk, strlen(chunk)) < 0)
+            memset(output, 0, sizeof(output));
+            size_t total = 0;
+            char temp[BUFFER_SIZE];
+            while (fgets(temp, sizeof(temp), fp) != NULL)
             {
-                pclose(fp);
-                break;
+                size_t len = strlen(temp);
+                if (total + len < sizeof(output))
+                {
+                    strcat(output, temp);
+                    total += len;
+                }
+                else
+                {
+                    break;
+                }
             }
+            pclose(fp);
         }
-        pclose(fp);
 
-        // Send the delimiter after all chunks
-        if (send_all(client_sock, DELIMITER, strlen(DELIMITER)) < 0)
+        // Even if output is empty, ensure the delimiter is sent
+        strcat(output, FINISHER);
+
+        if (send(client_sock, output, strlen(output), 0) < 0)
         {
+            perror("send failed");
             break;
         }
     }
