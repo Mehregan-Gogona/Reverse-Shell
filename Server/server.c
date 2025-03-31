@@ -28,6 +28,21 @@ int send_all(int sock, const char *buffer, size_t length)
     return 0;
 }
 
+// Function to check if a string is empty or contains only whitespace
+int is_empty_or_whitespace(const char *str)
+{
+    if (str == NULL)
+        return 1;
+
+    while (*str)
+    {
+        if (!isspace((unsigned char)*str))
+            return 0;
+        str++;
+    }
+    return 1;
+}
+
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
