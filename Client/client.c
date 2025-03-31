@@ -19,20 +19,8 @@ int main(int argc, char *argv[])
     int sock;
     struct sockaddr_in server_addr;
     char command[BUFFER_SIZE];
-    // char response[BUFFER_SIZE * 2];
+    char response[BUFFER_SIZE * 2];
     ssize_t num_received;
-    // Replace the fixed-size response buffer with a dynamic one:
-
-    char *response = NULL;
-    size_t response_size = BUFFER_SIZE;
-    size_t total_read = 0;
-
-    response = malloc(response_size);
-    if (!response)
-    {
-        perror("malloc failed");
-        exit(EXIT_FAILURE);
-    }
 
     if (argc != 2)
     {
@@ -69,41 +57,54 @@ int main(int argc, char *argv[])
 
     while (1)
     {
-        // Check if buffer needs expansion
-        if (total_read + BUFFER_SIZE >= response_size)
+        printf("client> ");
+        fflush(stdout);
+        if (fgets(command, sizeof(command), stdin) == NULL)
         {
-            response_size *= 2;
-            char *new_response = realloc(response, response_size);
-            if (!new_response)
-            {
-                perror("realloc failed");
-                free(response);
-                exit(EXIT_FAILURE);
-            }
-            response = new_response;
-        }
-
-        ssize_t num_received = recv(sock, response + total_read, response_size - total_read - 1, 0);
-        if (num_received <= 0)
-        {
-            perror("recv failed or connection closed");
-            free(response);
-            exit(EXIT_FAILURE);
-        }
-
-        total_read += num_received;
-        response[total_read] = '\0';
-
-        if (contains_FINISHER(response))
-        {
-            char *delim_ptr = strstr(response, FINISHER);
-            *delim_ptr = '\0';
-            printf("%s", response);
             break;
         }
-    }
+        command[strcspn(command, "\n")] = '\0';
 
-    free(response);
+        // Send command
+        if (send(sock, command, strlen(command), 0) < 0)
+        {
+            perror("send failed");
+            break;
+        }
+
+        // If exit command, break out of loop
+        if (strncmp(command, "exit", 4) == 0)
+        {
+            break;
+        }
+
+        // Read response until the FINISHER is encountered.
+        memset(response, 0, sizeof(response));
+        int total_read = 0;
+        while (1)
+        {
+            num_received = recv(sock, response + total_read, sizeof(response) - total_read - 1, 0);
+            if (num_received <= 0)
+            {
+                perror("recv failed or connection closed");
+                exit(EXIT_FAILURE);
+            }
+            total_read += num_received;
+            response[total_read] = '\0';
+            if (contains_FINISHER(response))
+            {
+                // Remove FINISHER before printing.
+                char *delim_ptr = strstr(response, FINISHER);
+                if (delim_ptr)
+                {
+                    *delim_ptr = '\0';
+                }
+                break;
+            }
+        }
+
+        printf("%s", response);
+    }
 
     close(sock);
     return 0;
