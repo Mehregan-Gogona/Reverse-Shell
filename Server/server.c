@@ -7,18 +7,32 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <ctype.h>
 
 #define PORT 3000
-#define BUFFER_SIZE 1024
-#define FINISHER "***" // End-of-message delimiter
+#define CHUNK_SIZE 1024
+#define DELIMITER "***" // End-of-message delimiter
+
+// Send data in full even if it is longer than CHUNK_SIZE.
+int send_all(int sock, const char *buffer, size_t length)
+{
+    size_t total_sent = 0;
+    while (total_sent < length)
+    {
+        ssize_t sent = send(sock, buffer + total_sent, length - total_sent, 0);
+        if (sent <= 0)
+        {
+            return -1; // error or connection closed
+        }
+        total_sent += sent;
+    }
+    return 0;
+}
 
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
     free(arg);
-    char command[BUFFER_SIZE];
-    char output[BUFFER_SIZE * 2];
+    char command[CHUNK_SIZE];
     ssize_t num_read;
 
     while (1)
@@ -32,85 +46,103 @@ void *client_handler(void *arg)
         }
         command[num_read] = '\0';
 
-        // Skip command execution if it's empty.
-        if (is_empty_or_whitespace(command))
-        {
-            const char *empty_msg = "No command provided.\n";
-            send(client_sock, empty_msg, strlen(empty_msg), 0);
-            continue;
-        }
-
-        // Check for "exit" command
+        // Handle exit.
         if (strncmp(command, "exit", 4) == 0)
-        {
             break;
-        }
 
-        // Handling the "cd" command (special case)
+        // Handle "cd" command specially.
+        char output_buffer[CHUNK_SIZE * 2];
+        memset(output_buffer, 0, sizeof(output_buffer));
         if (strncmp(command, "cd ", 3) == 0)
         {
             char *dir = command + 3;
             if (dir[0] == '\0')
-            {
                 dir = getenv("HOME");
-            }
             if (chdir(dir) != 0)
             {
-                snprintf(output, sizeof(output), "cd: %s: %s\n", dir, strerror(errno));
+                snprintf(output_buffer, sizeof(output_buffer), "cd: %s: %s\n", dir, strerror(errno));
             }
             else
             {
-                char cwd[1024];
+                char cwd[CHUNK_SIZE];
                 if (getcwd(cwd, sizeof(cwd)) != NULL)
                 {
-                    snprintf(output, sizeof(output), "Directory changed to: %s\n", cwd);
+                    snprintf(output_buffer, sizeof(output_buffer), "Directory changed to: %s\n", cwd);
                 }
                 else
                 {
-                    snprintf(output, sizeof(output), "cd: error retrieving current directory\n");
+                    snprintf(output_buffer, sizeof(output_buffer), "cd: error retrieving current directory\n");
                 }
             }
-            // Append delimiter even for commands with output
-            strcat(output, FINISHER);
-            send(client_sock, output, strlen(output), 0);
+            // Append delimiter to signal end of output.
+            strncat(output_buffer, DELIMITER, sizeof(output_buffer) - strlen(output_buffer) - 1);
+            if (send_all(client_sock, output_buffer, strlen(output_buffer)) < 0)
+                break;
             continue;
         }
 
-        // Execute general commands via popen
+        // Prepare to read command output.
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
-            snprintf(output, sizeof(output), "Failed to execute command.\n");
+            snprintf(output_buffer, sizeof(output_buffer), "Failed to execute command.\n");
+            strncat(output_buffer, DELIMITER, sizeof(output_buffer) - strlen(output_buffer) - 1);
+            if (send_all(client_sock, output_buffer, strlen(output_buffer)) < 0)
+                break;
+            continue;
         }
-        else
+
+        // Dynamically send while reading in chunks.
+        char chunk[CHUNK_SIZE];
+        // We'll accumulate output in a temporary buffer before appending the delimiter.
+        size_t total_output_size = 0;
+        char *full_output = NULL;
+        size_t alloc_size = 0;
+        while (fgets(chunk, sizeof(chunk), fp) != NULL)
         {
-            memset(output, 0, sizeof(output));
-            size_t total = 0;
-            char temp[BUFFER_SIZE];
-            while (fgets(temp, sizeof(temp), fp) != NULL)
+            size_t chunk_len = strlen(chunk);
+            // Increase buffer if needed.
+            if (total_output_size + chunk_len + 1 > alloc_size)
             {
-                size_t len = strlen(temp);
-                if (total + len < sizeof(output))
+                alloc_size = (total_output_size + chunk_len + 1) * 2;
+                full_output = realloc(full_output, alloc_size);
+                if (full_output == NULL)
                 {
-                    strcat(output, temp);
-                    total += len;
-                }
-                else
-                {
+                    perror("realloc failed");
                     break;
                 }
             }
-            pclose(fp);
+            memcpy(full_output + total_output_size, chunk, chunk_len);
+            total_output_size += chunk_len;
+            full_output[total_output_size] = '\0';
+        }
+        pclose(fp);
+
+        // If no output, set an empty string.
+        if (full_output == NULL)
+        {
+            full_output = strdup("");
+            total_output_size = strlen(full_output);
         }
 
-        // Even if output is empty, ensure the delimiter is sent
-        strcat(output, FINISHER);
-
-        if (send(client_sock, output, strlen(output), 0) < 0)
+        // Append delimiter at the end.
+        size_t delim_len = strlen(DELIMITER);
+        full_output = realloc(full_output, total_output_size + delim_len + 1);
+        if (full_output == NULL)
         {
-            perror("send failed");
+            perror("realloc failed");
             break;
         }
+        strcat(full_output, DELIMITER);
+        total_output_size += delim_len;
+
+        // Send the full output regardless of its size.
+        if (send_all(client_sock, full_output, total_output_size) < 0)
+        {
+            free(full_output);
+            break;
+        }
+        free(full_output);
     }
 
     close(client_sock);
