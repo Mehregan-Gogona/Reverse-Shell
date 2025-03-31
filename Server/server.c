@@ -7,9 +7,24 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ctype.h>
 
 #define PORT 3000
 #define BUFFER_SIZE 1024
+
+// Function to check if a string is empty or contains only whitespace
+int is_empty_or_whitespace(const char *s)
+{
+    while (*s)
+    {
+        if (!isspace((unsigned char)*s))
+        {
+            return 0;
+        }
+        s++;
+    }
+    return 1;
+}
 
 // Thread function to handle an individual client connection.
 // Adjusted to handle "cd" commands properly by updating the working directory.
@@ -24,29 +39,37 @@ void *client_handler(void *arg)
     while (1)
     {
         memset(command, 0, sizeof(command));
+        
         // Receive command from the client
         num_read = recv(client_sock, command, sizeof(command) - 1, 0);
         if (num_read <= 0)
         {
-            perror("recv failed or connection closed!");
+            perror("recv failed or connection closed");
             break;
         }
         command[num_read] = '\0';
 
-        // If the command is "exit", break out of the loop
+        // Check if the command is empty or only whitespace, and continue without blocking
+        if (is_empty_or_whitespace(command))
+        {
+            const char *empty_msg = "No command provided.\n";
+            send(client_sock, empty_msg, strlen(empty_msg), 0);
+            continue;
+        }
+
+        // Process your "exit" command and "cd" command, etc.
         if (strncmp(command, "exit", 4) == 0)
         {
             break;
         }
 
-        // Check for "cd" command and handle it specially.
         if (strncmp(command, "cd ", 3) == 0)
         {
             // Get the argument after "cd "
             char *dir = command + 3;
-            // If no directory is provided, you could default to home directory.
-            if (strlen(dir) == 0)
+            if (is_empty_or_whitespace(dir))
             {
+                // Default to HOME directory if no argument is provided
                 dir = getenv("HOME");
             }
             if (chdir(dir) != 0)
@@ -66,20 +89,15 @@ void *client_handler(void *arg)
                     snprintf(output, sizeof(output), "cd: error retrieving current directory\n");
                 }
             }
-            if (send(client_sock, output, strlen(output), 0) < 0)
-            {
-                perror("send failed!");
-                break;
-            }
-            memset(output, 0, sizeof(output)); // Clear output buffer
-            continue;                          // Skip popen() execution, move to next iteration.
+            send(client_sock, output, strlen(output), 0);
+            continue;
         }
 
-        // For other commands, execute them using popen() in the current working directory.
+        // Execute other commands using popen()
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
-            snprintf(output, sizeof(output), "Failed to execute command!\n");
+            snprintf(output, sizeof(output), "Failed to execute command.\n");
         }
         else
         {
