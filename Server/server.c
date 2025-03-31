@@ -13,6 +13,20 @@
 #define BUFFER_SIZE 1024
 #define FINISHER "***" // End-of-message delimiter
 
+// Function to check if a string is empty or contains only whitespace
+int is_empty_or_whitespace(const char *s)
+{
+    while (*s)
+    {
+        if (!isspace((unsigned char)*s))
+        {
+            return 0;
+        }
+        s++;
+    }
+    return 1;
+}
+
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
