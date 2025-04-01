@@ -111,7 +111,7 @@ int main(int argc, char *argv[])
                 int n = recv(sock, buffer, to_receive, 0);
                 if (n <= 0)
                 {
-                    perror("recv failed or connection closed");
+                    perror("recieve failed or connection closed");
                     exit(EXIT_FAILURE);
                 }
 

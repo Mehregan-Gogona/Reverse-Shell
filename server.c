@@ -86,7 +86,7 @@ void *client_handler(void *arg)
         // Check if the connection is closed
         if (num_read <= 0)
         {
-            perror("recv failed or connection closed");
+            perror("recieve failed or connection closed");
             break;
         }
 
