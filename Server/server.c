@@ -11,7 +11,7 @@
 
 #define PORT 3000
 #define BUFFER_SIZE 1024
-#define FINISHER "***" // End-of-message delimiter
+#define MAX_CHUNK_SIZE 1024
 
 // Function to check if a string is empty or contains only whitespace
 int is_empty_or_whitespace(const char *s)
@@ -27,12 +27,47 @@ int is_empty_or_whitespace(const char *s)
     return 1;
 }
 
+// Function to send data in chunks
+void send_chunked_data(int client_sock, const char *data, size_t data_len)
+{
+    size_t bytes_sent = 0;
+
+    // Send data in chunks
+    while (bytes_sent < data_len)
+    {
+        // Calculate chunk size
+        size_t remaining = data_len - bytes_sent;
+        int chunk_size = remaining < MAX_CHUNK_SIZE ? remaining : MAX_CHUNK_SIZE;
+
+        // Send chunk size in network byte order
+        int network_chunk_size = htonl(chunk_size);
+        if (send(client_sock, &network_chunk_size, sizeof(int), 0) < 0)
+        {
+            perror("Failed to send chunk size");
+            return;
+        }
+
+        // Send chunk data
+        if (send(client_sock, data + bytes_sent, chunk_size, 0) < 0)
+        {
+            perror("Failed to send chunk data");
+            return;
+        }
+
+        bytes_sent += chunk_size;
+    }
+
+    // Send a zero-sized chunk to indicate end of data
+    int end_marker = 0;
+    send(client_sock, &end_marker, sizeof(int), 0);
+}
+
 void *client_handler(void *arg)
 {
     int client_sock = *(int *)arg;
     free(arg);
     char command[BUFFER_SIZE];
-    char output[BUFFER_SIZE * 2];
+    char buffer[BUFFER_SIZE];
     ssize_t num_read;
 
     while (1)
@@ -50,7 +85,7 @@ void *client_handler(void *arg)
         if (is_empty_or_whitespace(command))
         {
             const char *empty_msg = "No command provided.\n";
-            send(client_sock, empty_msg, strlen(empty_msg), 0);
+            send_chunked_data(client_sock, empty_msg, strlen(empty_msg));
             continue;
         }
 
@@ -63,6 +98,7 @@ void *client_handler(void *arg)
         // Handling the "cd" command (special case)
         if (strncmp(command, "cd ", 3) == 0)
         {
+            char output[BUFFER_SIZE];
             char *dir = command + 3;
             if (dir[0] == '\0')
             {
@@ -84,9 +120,7 @@ void *client_handler(void *arg)
                     snprintf(output, sizeof(output), "cd: error retrieving current directory\n");
                 }
             }
-            // Append delimiter even for commands with output
-            strcat(output, FINISHER);
-            send(client_sock, output, strlen(output), 0);
+            send_chunked_data(client_sock, output, strlen(output));
             continue;
         }
 
@@ -94,36 +128,26 @@ void *client_handler(void *arg)
         FILE *fp = popen(command, "r");
         if (fp == NULL)
         {
-            snprintf(output, sizeof(output), "Failed to execute command.\n");
+            const char *error_msg = "Failed to execute command.\n";
+            send_chunked_data(client_sock, error_msg, strlen(error_msg));
         }
         else
         {
-            memset(output, 0, sizeof(output));
-            size_t total = 0;
-            char temp[BUFFER_SIZE];
-            while (fgets(temp, sizeof(temp), fp) != NULL)
+            // Read and send command output in chunks
+            size_t bytes_read;
+            while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0)
             {
-                size_t len = strlen(temp);
-                if (total + len < sizeof(output))
-                {
-                    strcat(output, temp);
-                    total += len;
-                }
-                else
-                {
-                    break;
-                }
+                // Send this chunk of data
+                int chunk_size = htonl(bytes_read);
+                send(client_sock, &chunk_size, sizeof(int), 0);
+                send(client_sock, buffer, bytes_read, 0);
             }
+
+            // Signal end of data
+            int end_marker = 0;
+            send(client_sock, &end_marker, sizeof(int), 0);
+
             pclose(fp);
-        }
-
-        // Even if output is empty, ensure the delimiter is sent
-        strcat(output, FINISHER);
-
-        if (send(client_sock, output, strlen(output), 0) < 0)
-        {
-            perror("send failed");
-            break;
         }
     }
 

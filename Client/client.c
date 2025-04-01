@@ -6,21 +6,14 @@
 
 #define PORT 3000
 #define BUFFER_SIZE 1024
-#define FINISHER "***" // This must match the server's FINISHER
-
-// Helper function to check if the FINISHER exists within a string.
-int contains_FINISHER(const char *buffer)
-{
-    return strstr(buffer, FINISHER) != NULL;
-}
 
 int main(int argc, char *argv[])
 {
     int sock;
     struct sockaddr_in server_addr;
     char command[BUFFER_SIZE];
-    char response[BUFFER_SIZE * 2];
-    ssize_t num_received;
+    char buffer[BUFFER_SIZE];
+    int chunk_size;
 
     if (argc != 2)
     {
@@ -78,32 +71,44 @@ int main(int argc, char *argv[])
             break;
         }
 
-        // Read response until the FINISHER is encountered.
-        memset(response, 0, sizeof(response));
-        int total_read = 0;
+        // Read response in chunks
         while (1)
         {
-            num_received = recv(sock, response + total_read, sizeof(response) - total_read - 1, 0);
-            if (num_received <= 0)
+            // First read the chunk size (4 bytes integer)
+            if (recv(sock, &chunk_size, sizeof(int), 0) <= 0)
             {
                 perror("recv failed or connection closed");
                 exit(EXIT_FAILURE);
             }
-            total_read += num_received;
-            response[total_read] = '\0';
-            if (contains_FINISHER(response))
+
+            // Convert from network byte order
+            chunk_size = ntohl(chunk_size);
+
+            // If chunk_size is 0, we've received all chunks
+            if (chunk_size == 0)
             {
-                // Remove FINISHER before printing.
-                char *delim_ptr = strstr(response, FINISHER);
-                if (delim_ptr)
-                {
-                    *delim_ptr = '\0';
-                }
                 break;
             }
-        }
 
-        printf("%s", response);
+            // Read the chunk data
+            int bytes_received = 0;
+            while (bytes_received < chunk_size)
+            {
+                int remaining = chunk_size - bytes_received;
+                int to_receive = remaining < BUFFER_SIZE ? remaining : BUFFER_SIZE;
+
+                int n = recv(sock, buffer, to_receive, 0);
+                if (n <= 0)
+                {
+                    perror("recv failed or connection closed");
+                    exit(EXIT_FAILURE);
+                }
+
+                // Print chunk data directly
+                fwrite(buffer, 1, n, stdout);
+                bytes_received += n;
+            }
+        }
     }
 
     close(sock);
